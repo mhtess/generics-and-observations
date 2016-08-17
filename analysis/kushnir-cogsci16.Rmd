@@ -1,0 +1,160 @@
+---
+title: "kushnir-cogsci16"
+author: "mht"
+date: "August 16, 2016"
+output: html_document
+---
+
+```{r}
+d <- read.csv("data/AdultGenericAlProbabilitiesStudy2_ForMH.csv")
+d.tidy <- d %>%
+  rename(observed_freq = Probability,
+         prev_1 = EstimatePercentage1,
+         prev_2 = EstimatePercentage2,
+         objknowledge_1 = ObjectKnowledge1Code,
+         objknowledge_2 = ObjectKnowledge2Code,
+         macknowledge_1 = MachineKnowledge1Code,
+         macknowledge_2 = MachineKnowledge2Code) %>%
+  gather(key, val, -observed_freq, -ID, -Language) %>%
+  separate(key, into=c("question", "machine_no")) %>%
+  mutate(Language = factor(Language, levels = c(1,2,3),
+                           labels = c("specific", "generic", "all")))
+```
+
+
+Filter out the knowledge questions.
+
+```{r}
+d.prev <- d.tidy %>%
+  filter(question == "prev")
+```
+
+
+
+```{r}
+ggplot(d.prev, aes(x = val))+
+  geom_histogram(position = position_dodge(), binwidth = 5)+
+  facet_grid(Language~observed_freq)
+```
+
+
+```{r}
+d.prev.stat <- d.prev %>%
+  group_by(Language, observed_freq) %>%
+  multi_boot_standard(column = "val", na.rm = T)
+
+
+ggplot(d.prev.stat, aes(x = observed_freq, y = mean,
+                        ymin = ci_lower, ymax = ci_upper,
+                        color = Language, fill = Language))+
+  geom_abline(intercept = 0, slope = 1, lty = 3)+
+  #geom_line(position=position_dodge(3), alpha = 0.6)+
+  geom_smooth(position=position_dodge(3), alpha = 0.2, size = 0.5, 
+              method = "lm")+
+  geom_errorbar(position=position_dodge(3), width = 3, size = 0.8)+
+  geom_point(position=position_dodge(3),size = 1.5)+
+  coord_fixed()+
+  xlim(0, 103)+
+  ylim(0, 103)+
+  theme_paper()+
+  xlab("Observed frequency")+
+  ylab("Human response -- frequency")
+
+
+ggplot(d.prev.stat %>%
+         filter(Language != "all"), aes(x = observed_freq, y = mean,
+                        ymin = ci_lower, ymax = ci_upper,
+                        color = Language))+
+  geom_errorbar(position=position_dodge(2.5), width = 0.4)+
+  geom_point(position=position_dodge(2.5))+
+  geom_smooth(alpha=0.1)
+
+```
+
+
+```{r}
+ggplot(d.prev %>%
+         filter((observed_freq <= 30 | observed_freq >= 80)), 
+       aes(x = val,fill = Language))+
+  geom_histogram(position = position_dodge(), binwidth = 5, color = 'black')+
+  facet_grid(Language~observed_freq)
+
+
+ggplot(d.prev %>%
+         filter((observed_freq <= 30 | observed_freq >= 80)), 
+       aes(x = val,fill = Language))+
+  geom_density(alpha = 0.5)+
+  #geom_histogram(position = position_dodge(), binwidth = 5)+#, color = 'black')+
+  facet_grid(.~observed_freq)
+
+```
+
+Regression
+
+```{r}
+d.prev.centered <- d.prev %>%
+  mutate(centered_prev = scale(observed_freq, scale = F))
+
+rs <- lmer(data = d.prev, val ~ Language*observed_freq + (1 | ID))
+
+summary(rs)
+
+rs <- lmer(data = d.prev.centered, val ~ -1 + Language*centered_prev + (1 | ID))
+
+summary(rs)
+
+
+contrasts(d.prev$Language) <- matrix(c(c(1,0,0),c(0,0,1)), nrow =3)
+
+rs <- lmer(data = d.prev, val ~ Language*observed_freq + (1 | ID))
+
+summary(rs)
+
+```
+
+Compare each to a y=x line by bootstrapped
+
+```{r}
+d.gen <- d.prev %>% filter(Language == "generic")
+d.spec <- d.prev %>% filter(Language == "specific")
+d.all <- d.prev %>% filter(Language == "all")
+d.gen.slopes = data.frame(generic = NA,
+                          specific = NA,
+                          all = NA)
+
+for (i in 1:1000){
+  d.out <- d.gen[sample(nrow(d.gen), 
+                      size=nrow(d.gen), replace=TRUE),] %>%
+  lmer(data = ., val ~ observed_freq + (1 | ID)) %>%
+  summary(.)
+
+ d.gen.slopes[i,"generic"] <-
+   d.out$coefficients["observed_freq","Estimate"]
+
+   d.out <- d.spec[sample(nrow(d.spec), 
+                      size=nrow(d.spec), replace=TRUE),] %>%
+  lmer(data = ., val ~ observed_freq + (1 | ID)) %>%
+  summary(.)
+
+ d.gen.slopes[i,"specific"] <-
+   d.out$coefficients["observed_freq","Estimate"]
+ 
+   d.out <- d.all[sample(nrow(d.all), 
+                      size=nrow(d.all), replace=TRUE),] %>%
+  lmer(data = ., val ~ observed_freq + (1 | ID)) %>%
+  summary(.)
+
+ d.gen.slopes[i,"all"] <-
+   d.out$coefficients["observed_freq","Estimate"]
+ 
+  if (i%%50 == 0) print(i)
+}
+
+d.gen.slopes %>%
+  gather(key, val) %>%
+  ggplot(., aes(x = val, fill = key))+
+  geom_histogram(alpha = 0.8, position = position_dodge())
+
+```
+
+y = x line would correspond to slope of 1.
