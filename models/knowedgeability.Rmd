@@ -1,0 +1,123 @@
+---
+title: "generics-knowledgability"
+author: "mht"
+date: "June 3, 2016"
+output: html_document
+---
+
+### "Biological priors" (bimodal, with peak at 0)
+
+
+```{r echo=F}
+
+model.predictions <- data.frame(evidence = seq(0,10,1),
+                                generics = 
+                                  c(0.28247874321325295,
+                                    0.35451555100930976,
+                                    0.4255692181911274,
+                                    0.49649136325887877,
+                                    0.5674134257151008,
+                                    0.6384249851413658,
+                                    0.7098083055129562,
+                                    0.7800337011206964,
+                                    0.8520544313187414,
+                                    0.948587068729428,
+                                    0.9859570780727166),
+                                binomial = 
+                                  c(0.00004561807521656838,
+                                    0.3003204797717665,
+                                    0.3816227342995948,
+                                    0.45802229835878727,
+                                    0.5343449472319859,
+                                    0.6107256840731722,
+                                    0.6874269233568011,
+                                    0.7633300052157479,
+                                    0.8403481043755044,
+                                    0.9427306842302724,
+                                    0.9853593059281477 )) %>%
+  gather(key, val, -evidence)
+
+ggplot(model.predictions, aes(x = evidence, y=val, color = key, group=key))+
+  geom_point()+
+  geom_smooth()+
+  ggtitle("With 'biological' priors")+
+  coord_fixed(ratio = 10)
+```
+
+### Symmetric, bimodal priors (no peak at 0)
+
+Beta(0.1,0.1)
+
+```{r echo=F}
+model.predictions <- data.frame(evidence = seq(0,10,1),
+generics = c(0.022901446265150005,
+  0.14690629911376346,
+  0.2900826825807544,
+  0.3777461594269849,
+  0.4632554495893851,
+  0.5500760150381189,
+  0.637912439970687,
+  0.7258975880683745,
+  0.8147235486563084,
+  0.930314704635253,
+  0.9841424328889403),
+binomial = c(0.016914166604260764,
+  0.08007496082855085,
+  0.2053802731169894,
+  0.3037266696759229,
+  0.4018069106888166,
+  0.4999999999999996,
+  0.5981930893111833,
+  0.6962733303240772,
+  0.7946197268830106,
+  0.9199250391714492,
+  0.9830858333957394)
+) %>%
+  gather(key, val, -evidence)
+
+
+
+ggplot(model.predictions, aes(x = evidence, y=val, color = key, group=key))+
+  geom_point()+
+  geom_smooth()+
+  ggtitle("With bimodal priors")+
+  coord_fixed(ratio = 10)
+```
+
+### Uniform priors
+
+```{r echo=F}
+model.predictions <- data.frame(evidence = seq(0,10,1),
+                                generics = 
+                                  c(0.08972564594226332,
+                                    0.23634988063082954,
+                                    0.32102510650267224,
+                                    0.39656416574606135,
+                                    0.4715243372192592,
+                                    0.546516761261241,
+                                    0.6216996075502567,
+                                    0.6973737991922044,
+                                    0.772160974033552,
+                                    0.8502983546276394,
+                                    0.9516324609628625 ),
+                                binomial = 
+                                  c(0.05504651205793699,
+                                    0.16489309121313667,
+                                    0.25006041832862175,
+                                    0.33299808159169825,
+                                    0.41663560969692137,
+                                    0.5,
+                                    0.583364390303079,
+                                    0.6670019184083016,
+                                    0.749939581671378,
+                                    0.8351069087868633,
+                                    0.9449534879420629)) %>%
+  gather(key, val, -evidence)
+
+ggplot(model.predictions, aes(x = evidence, y=val, color = key, group=key))+
+  geom_point()+
+  geom_smooth()+
+  ggtitle("With uniform priors")+
+  coord_fixed(ratio = 10)
+
+```

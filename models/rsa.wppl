@@ -1,0 +1,99 @@
+var shape_alpha = function(g,d){return g * d};
+var shape_beta = function(g,d){return (1-g) * d};
+
+var bins = [0, 0.01, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.99];
+
+var betaPMF = function(a, b, bins){
+  return map(function(d){return Math.exp(Beta({a:a, b:b}).score(d))}, bins)
+}
+
+var structuredPrior = function(mix, a, b){
+  Infer({method: "enumerate"}, function(){
+     return flip(mix) ? bins[discrete(betaPMF(a, b, bins))] : 0
+  })
+}
+
+var nearestBin = function(x, bins){
+  return x > _.max(bins) ? 
+      _.max(bins) :
+      x < _.min(bins) ? 
+      _.min(bins) :
+      bins[Math.round(((x - _.min(bins))/(_.max(bins) - _.min(bins)))*(bins.length-1))]
+}
+
+var thetaBins = [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]
+
+var prior = structuredPrior(0.5, 3, 0.1)
+// var prior = structuredPrior(1, 0.1, 0.1)
+
+
+var thetaPrior = function() {
+  var threshold = uniformDraw(thetaBins)//something might go(?) wonky if "generic is false" can never be false
+  return threshold
+}
+
+var utterancePrior = function() {
+   // var utterances = ["generic is true",
+   //                  "generic is false"]
+   var utterances = ["generic", "mu"]  
+  var cost = 1      
+  var cst = [1,cost]       
+  return utterances[discrete(cst)]
+
+}
+
+var meaning = function(utt,state, theta) {
+  return _.isNumber(utt) ? state == utt :
+  		   utt=="generic"? state>theta :
+         utt=="generic is false"? state<=theta :
+         utt=="some is true"? state>0 :
+         utt=="some is false"? state==0 :
+         utt=='mu'? true:
+         utt=='some'? state>0:
+         utt=='most'? state>= 0.5:
+         utt=='all'? state >= 0.99:
+         true
+}
+
+var speakerOptimality = 5
+
+var listener0 = cache(function(utterance, theta) {
+  Infer({method: "enumerate"},function(){
+    var state = sample(prior)
+    var m = meaning(utterance, state, theta)
+    condition(m)
+    return state
+  })
+})
+
+var speaker1 = cache(function(state, theta) {
+  Infer({method: "enumerate"}, function(){
+
+    var utterance = utterancePrior()
+    var L0 = listener0(utterance, theta)
+
+    factor(speakerOptimality*L0.score(state))
+
+    return utterance
+  })
+})
+
+var listener = function(utterance, evidence) {
+  Infer({method: "enumerate"}, function(){
+    var state = sample(prior)
+
+    // console.log(state)
+    state > 0 ? factor(Binomial({n:10, p:state}).score(evidence)) : 
+                factor(Binomial({n:10, p:0.000001}).score(evidence))
+
+    var theta = thetaPrior()
+    var S1 = speaker1(state, theta)
+    
+    // factor(S1.score(utterance))
+
+    return state
+  })
+}
+
+map(function(e){expectation(listener("generic", e))}, _.range(0,11))
+

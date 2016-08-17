@@ -1,0 +1,22 @@
+var shape_alpha = function(g,d){return g * d};
+var shape_beta = function(g,d){return (1-g) * d};
+
+var bins = [0, 0.01, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.99];
+
+var betaPMF = function(a, b, bins){
+	return map(function(d){return Math.exp(Beta({a:a, b:b}).score(d))}, bins)
+}
+
+var structuredPrior = function(mix, a, b){
+  Infer({method: "enumerate"}, function(){
+   	 return flip(mix) ? bins[discrete(betaPMF(a, b, bins))] : 0
+  })
+}
+
+var nearestBin = function(x, bins){
+  return x > _.max(bins) ? 
+      _.max(bins) :
+      x < _.min(bins) ? 
+      _.min(bins) :
+      bins[Math.round(((x - _.min(bins))/(_.max(bins) - _.min(bins)))*(bins.length-1))]
+}
