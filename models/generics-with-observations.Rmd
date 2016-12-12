@@ -121,13 +121,16 @@ rs %>% gather(key, val, -n) %>%
   
 ```
 
+2 dimensions of observations: 
+- n positive vs. n total
 
 
 ## Generics and observations through generations
 
 
+
 ```{r}
-rsa <- '
+rsaBasics <- '
 var snap = function(x){
   return Math.round(x*20)/20
 }
@@ -142,17 +145,6 @@ var acrossKind = function(typesOfIndividuals, rates){
   return snap(rate)
   // return {component: individualType, prevalence: snap(rate)}
 }
-
-var speakerParams = {
-  typesOfInidividuals: {
-    ps: [1, 0], vs: ["x0", "x1"]
-  },
-  rates: {
-    //    x0: { a: 0.1, b: 10 } ,
-    x0: { a: 1, b: 1 } ,
-    x1: { a: 100, b: 1  }
-  }
-};
 
 var statePrior = Infer({method: "forward", samples: 10000}, 
                        function(){ acrossKind(speakerParams.typesOfInidividuals, speakerParams.rates) })
@@ -190,16 +182,42 @@ var speaker1 = cache(function(prevalence, threshold) {
     return utterance
   })
 })
+'
+```
 
+
+```{r}
+priorParams <- '
+var speakerParams = {
+  typesOfInidividuals: {
+//   ps: [0.7, 0.3], vs: ["x0", "x1"]
+    ps: [1, 0], vs: ["x0", "x1"]
+  },
+  rates: {
+        x0: { a: 1, b: 1} ,
+//        x0: { a: 0.3, b: 3 } ,
+    // x0: { a: 0.5, b: 0.5 } ,
+  //   x1: { a: 50, b: 1  }
+  }
+};
+'
+```
+
+
+1st gen makes some observation (e.g., 1 out of 10 success), decides whether or not to say generic. 
+
+Future generations just get to hear the generic.
+```{r}
+simulation1 <- ' 
 var learner = cache(function(utterance, obs) {
   Infer({method: "enumerate"}, function(){
-    var prevalence = sample(statePrior)    
+    var prevalence = sample(statePrior);    
     var threshold = thresholdPrior();
     var S1 = speaker1(prevalence, threshold)
     utterance ? observe(S1, utterance) : null
     obs ? observe(
-    Binomial({p: prevalence,n: (obs.positive + obs.negative)}), 
-    obs.positive): null
+             Binomial({p: prevalence, n: (obs.positive + obs.negative)}), 
+            obs.positive) : null
   return prevalence
 })
 })
@@ -209,7 +227,7 @@ var speaker = function(utterance, obs){
     var prior = learner(utterance, obs);
     var prevalence = sample(prior);
     
-    var utterance = utterancePrior();    
+    var utterance = utterancePrior();    // alterative generic utterances vs. individual statements (maybe quanitifers)
     var L1 = learner(utterance);
     factor(alpha_2 * L1.score(prevalence));
     
@@ -218,27 +236,124 @@ var speaker = function(utterance, obs){
 }
 
 var nextGeneration = function(lastGenUtterances){
-  Infer({method: "enumerate"}, function(){
-    var utterance = sample(lastGenUtterances)
+//  Infer({method: "enumerate"}, function(){
+    var utterance = sample(lastGenUtterances);
+    // sample from the world
     var nextG = speaker(utterance, false)
-    return sample(nextG)
-  })
+    // return sample(nextG)
+    return nextG
+//  })
 }
 
 var nChains = data[0];
 
+// explore injecting data at each gen.
+
 var runChain = function(n, g, initialObservations){
-  var lastGen = g ? g : speaker(false, initialObservations )
-  globalStore["g" + (nChains - n)] = Math.exp(lastGen.score("generic"))
-  return n === 0 ? lastGen :
-  runChain(n - 1, nextGeneration(lastGen), initialObservations)
+  var lastGen = g ? g : speaker(false, initialObservations );
+  
+  globalStore["g_" + (nChains - n)] = Math.exp(lastGen.score("generic"))
+  return n === 0 ? 
+    lastGen :
+    runChain(n - 1, nextGeneration(lastGen), initialObservations)
 }
 
 var chain = runChain(nChains, false, {positive:1, negative: 9})
 
 _.pairs(globalStore)
-//globalStore
 '
-rs <- webppl(rsa, data_var = "data", data = 2)
 ```
+
+```{r}
+rs <- webppl(paste(priorParams, rsaBasics, simulation1, sep = "\n"), 
+             data_var = "data", 
+             data = 100)
+
+data.frame(rs) %>% 
+  rename(gen = X1, generic_prob = X2) %>%
+  separate(gen, into = c("g", "n")) %>%
+  mutate(n = to.n(n), generic_prob  = to.n(generic_prob)) %>%
+  ggplot(., aes( x = n , y = generic_prob))+
+  geom_line()+
+  ylim(0, 1)+
+  xlab("Generation")+
+  ylab("Generic production probability")
+```
+
+
+# Questions
+
+1. Try Beppu style: Learn from generics + the world; to converge on true $h$.
+-- What is true h? Could be the `flip(p)` or `p`
+
+
+```{r}
+dataPassing <- '
+var learner = function(obs) {
+  Infer({method: "enumerate"}, function(){
+    var prevalence = sample(statePrior)    
+    obs ? observe(
+             Binomial({p: prevalence,n: (obs.positive + obs.negative)}), 
+            obs.positive) : null
+  return prevalence
+})
+}
+
+var nextGeneration = function(lastGenPosterior){
+  Infer({method: "enumerate"}, function(){
+    var d = sum(repeat(20, function(){ flip(sample(lastGenPosterior)) }));
+    return sample(learner({positive: d, negative: 20 - d}));
+ })
+}
+
+var nChains = data[0];
+
+var runChain = function(n, g, initialObservations){
+  var lastGen = g ? g : learner(initialObservations);
+  globalStore["g_" + (nChains - n)] = expectation(lastGen);
+  return n === 0 ? 
+    lastGen :
+    runChain(n - 1, nextGeneration(lastGen), initialObservations)
+}
+
+var chain = runChain(nChains, false, {positive:8, negative: 2})
+
+_.pairs(globalStore)
+// nextGeneration(learner({positive:10, negative: 10}))
+'
+```
+
+```{r}
+rs <- webppl(paste(priorParams, rsaBasics, dataPassing, sep = "\n"), 
+             data_var = "data", 
+             data = 2)
+
+rs.chains = data.frame()
+
+for (i in seq(1,3)){
+  
+  rs <- webppl(paste(priorParams, rsaBasics, dataPassing, sep = "\n"), 
+             data_var = "data", 
+             data = 10)
+  
+  rs <- data.frame(rs) %>% 
+    rename(gen = X1, prevalence = X2) %>%
+    separate(gen, into = c("g", "n")) %>%
+    mutate(n = to.n(n), prevalence  = to.n(prevalence),
+           chain = i)
+  
+  rs.chains <- bind_rows(rs.chains, rs)
+  print(i)
+}
+
+
+  ggplot(rs.chains, aes( x = n , y = prevalence, color = chain, group = chain))+
+  geom_line()+
+  ylim(0, 1)+
+  xlab("Generation")+
+  ylab("Prevalence")
+```
+
+
+
 
