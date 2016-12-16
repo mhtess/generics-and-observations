@@ -1,0 +1,163 @@
+var absentParams = { a: 0.1, b: 100 };
+var presentParams = { a: 1, b: 1  };
+
+var speakerParams = {
+  typesOfIndividuals: {
+    ps: [.85, .05, .05, .05], 
+    vs: ["x0", "x1", "x2", "x3"] // x1 has feature f1, x2 has feature f2, x3 has both
+  },
+  rates: {
+    x0: {f1: absentParams,  f2: absentParams},
+    x1: {f1: presentParams, f2: absentParams},
+    x2: {f1: absentParams, f2: presentParams},
+    x3: {f1: presentParams, f2: presentParams}
+  }
+};
+
+var nbins = 10
+var bin_sep = nbins*2
+
+var snap = function(x){
+  return Math.round(x*nbins)/nbins
+}
+var marginalize = function(dist, key){
+  return Infer({model: function(){ return sample(dist)[key] } })
+}
+
+var generateKindsAndProperties = function(priorParams){
+  var typesOfIndividuals = priorParams.typesOfIndividuals;
+  var rates = priorParams.rates; 
+  var individualType = categorical({
+    ps: typesOfIndividuals.ps, vs: typesOfIndividuals.vs
+  });
+  var rate_f1 = beta(rates[individualType]["f1"]);
+  var rate_f2 = beta(rates[individualType]["f2"]);
+  return {
+    component: individualType, 
+    prevalence: {f1: snap(rate_f1), f2: snap(rate_f2)}
+  }
+};
+
+var statePrior = Infer({
+  method: "forward", 
+  samples: 10000, 
+  model: function(){ generateKindsAndProperties(speakerParams)} 
+});
+
+var alpha_1 = 5;
+var alpha_2 = 1;
+
+var utterances = ["generic_f1", "generic_f2", "silence"];
+
+var thresholdBins = map(function(x){
+  return x > (1/bin_sep) ? x - (1/bin_sep) : x;
+}, sort(marginalize(marginalize(statePrior, "prevalence"), "f1").support()));
+
+var thresholdPrior = Infer({model: function() { return uniformDraw(thresholdBins) }})
+var utterancePrior = Infer({model: function() { return uniformDraw(utterances) } })
+
+var meaning = function(utterance, prevalence, threshold) {
+  utterance === "generic_f1" ? prevalence.f1 > threshold : 
+  utterance === "generic_f2" ? prevalence.f2 > threshold : 
+  true
+}
+
+// "attempts" parameter governing the number of hypothetical observations
+// objects that are more rare will have fewer actual observations
+
+var world = cache(function(attempts){
+  Infer({model: function(){
+    
+    var pr_3rdComponent = Math.exp(marginalize(statePrior, "component").score("x3"));
+    var n = Math.round(attempts * pr_3rdComponent);
+
+    // assumes we're interested in the kind with both features
+    var state = sample(statePrior);
+    condition(state.component === "x3");    
+    
+    var k1 = binomial(state.prevalence.f1, n);
+    var k2 = binomial(state.prevalence.f2, n);
+    
+    // assumes observations are marginal counts (drops correlations);
+    return {n, k1, k2};
+  }})
+})
+
+var literalListener = cache(function(utterance, threshold, obs) {
+  Infer({model: function(){
+    var state = sample(statePrior)
+    var prevalence = state.prevalence;
+    var m = meaning(utterance, prevalence, threshold);
+//     observe(Binomial({p: prevalence.f1, n: obs.n}), obs.k1)
+//     observe(Binomial({p: prevalence.f2, n: obs.n}), obs.k2)
+    condition(m)   
+    return prevalence
+  }})
+})
+
+var speaker1 = cache(function(prevalence, threshold, att) {
+  Infer({model: function(){
+    var utterance = sample(utterancePrior)
+    var obs = sample(world(att)); // what will the learner observe?
+    var L0 = literalListener(utterance, threshold, obs)
+    factor( alpha_1*L0.score(prevalence) )
+    return utterance
+  }})
+})
+
+var listener = cache(function(utterance, obs, att) {
+  Infer({
+    model: function(){
+      var state = sample(statePrior)
+      var threshold = sample(thresholdPrior);
+      var prevalence = state.prevalence;
+//       display(JSON.stringify(obs))
+
+//       observe(Binomial({p: prevalence.f1, n: obs.n}), obs.k1)
+//       observe(Binomial({p: prevalence.f2, n: obs.n}), obs.k2)
+
+      var S1 = speaker1(prevalence, threshold, att)
+      observe(S1, utterance)
+
+      return state
+    }})
+})
+
+// var L1 = listener("generic_f1", false, 10);
+// viz.marginals(L1)
+// viz(speaker1({f1:0.05, f2: 0.15}, 0.1, 10))
+
+var speaker = function(prevalenceBeliefs, att){
+  Infer({
+    model: function(){
+//       var state = {prevalence: {f1:0.5, f2:0.2}, c:0}// 
+      var state = sample(prevalenceBeliefs); // what do I believe?
+      var utterance = sample(utterancePrior); // what should I say?
+      var learnerObs = sample(world(att)); // what will the learner observe?
+      var L1 = marginalize(listener(utterance, learnerObs, att), "prevalence");
+      factor(alpha_2 * L1.score( state.prevalence ));
+      return {utterance}
+    }})
+}
+
+// viz(speaker(false, 10))
+
+var learnFromWorld = cache(function(obs) {
+  Infer({model: function(){
+    var state = sample(statePrior)
+    var prevalence = state.prevalence;;    
+    observe(Binomial({p: prevalence.f1, n: obs.n}), obs.k1)
+    observe(Binomial({p: prevalence.f2, n: obs.n}), obs.k2)
+    return state
+  }})
+})
+
+// viz.table(marginalize(statePrior, "prevalence"))
+// viz.table(world(100))
+
+var initObs = {k1: 8, k2: 3, n:10};
+var L0 = learnFromWorld(initObs);
+var s1 = speaker(L0, 100);
+// viz.marginals(marginalize(L0, "prevalence"))
+
+viz.table(s1)

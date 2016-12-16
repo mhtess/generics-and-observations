@@ -1,0 +1,185 @@
+///fold:
+var speakerParams = {
+  typesOfInidividuals: {
+    ps: [0.95, 0.05], vs: ["x0", "x1"]
+  },
+  rates: {
+    x0: { a: 0.1, b: 100 } ,
+    x1: { a: 1, b: 4  }
+  }
+};
+
+var snap = function(x){
+  return Math.round(x*20)/20
+}
+var marginalize = function(dist, key){
+  return Infer({method: "enumerate"}, function(){ return sample(dist)[key] })
+}
+
+var acrossKind = function(typesOfIndividuals, rates){
+  var individualType = categorical({ps: typesOfIndividuals.ps, 
+                                    vs: typesOfIndividuals.vs});
+  var rate = beta(rates[individualType])
+
+  //   return  snap(rate)
+  return {component: individualType, prevalence: snap(rate)}
+}
+
+var statePrior = Infer({method: "forward", samples: 10000}, 
+                       function(){ acrossKind(speakerParams.typesOfInidividuals, speakerParams.rates) })
+
+
+var alpha_1 = 10;
+var alpha_2 = 1;
+
+var utterances = ["generic", "silence"];
+
+var thresholdBins = map(function(x){
+  return x > (1/40) ? x - (1/40) : x;
+}, sort(marginalize(statePrior, "prevalence").support()));
+
+var thresholdPrior = function() { return uniformDraw(thresholdBins) };
+var utterancePrior = function() { return uniformDraw(utterances) }
+
+var meaning = function(utterance, prevalence, threshold) {
+  return (utterance == "generic") ? prevalence > threshold : true
+}
+
+var literalListener = cache(function(utterance, threshold) {
+  Infer({method: "enumerate"}, function(){
+    var state = sample(statePrior)
+    var prevalence = state.prevalence;
+    var m = meaning(utterance, prevalence, threshold);
+    condition(m)
+    return prevalence
+  })
+})
+
+var speaker1 = cache(function(prevalence, threshold) {
+  Infer({method: "enumerate"}, function(){
+    var utterance = utterancePrior()
+    var L0 = literalListener(utterance, threshold)
+    factor( alpha_1*L0.score(prevalence) )
+    return utterance
+  })
+})
+///
+
+var learner = cache(function(utterance, obs) {
+  Infer({method: "enumerate"}, function(){
+    var state = sample(statePrior)
+    var prevalence = state.prevalence;
+    var threshold = thresholdPrior();
+    var S1 = speaker1(prevalence, threshold)
+    utterance ? observe(S1, utterance) : null
+    obs ? observe(Binomial({
+    p: prevalence, n: (obs.positive + obs.negative)}), 
+    obs.positive) : null
+  return state
+})
+})
+
+var world = Infer({model: function(){
+  var x =  binomial(0.1, 10);
+  return {positive: x, negative: 10 - x};
+}})
+
+var learnerPopulation = function(speakerDist){
+  Infer({model: function(){
+    var utt = sample(speakerDist);
+    //     var utt = speakerDist.MAP().val;
+//     var obs = {positive:1, negative: 9};
+//         var obs = false;
+    var obs = sample(world);
+    return sample(learner(utt, obs));
+  }})
+}
+
+var speaker = function(prevalenceBeliefs){
+  Infer({model: function(){
+    var state = sample(prevalenceBeliefs);
+
+    // try me:  condition(state.prevalence > 0)
+    //     var state = {prevalence: snap(expectation(prevalenceBeliefs,
+    //         function(x){return x.prevalence}))}
+
+    // generic or silence
+    var utterance = utterancePrior();    
+    var L1 = marginalize(learner(utterance), "prevalence");
+
+    factor(alpha_2 * L1.score(state.prevalence));
+
+    return utterance
+  }})
+}
+var initObs = {positive: 1, negative:9};
+
+// speaker distribution based on the prior
+var s2_0 = speaker(statePrior);
+
+// prevalence distribution after observations
+var obsPosterior = learner(false, initObs)
+
+// speaker distribution based on posterior after observations
+var s2_1 = speaker(obsPosterior);
+
+// prevalence distribution after population of generic speakers
+var L1_1 = learnerPopulation(s2_1);
+
+// speaker distribution based on posterior after generics
+var s2_2 = speaker(L1_1);
+
+var L1_2 = learnerPopulation(s2_2);
+var s2_3 = speaker(L1_2)
+var L1_3 = learnerPopulation(s2_3);
+var s2_4 = speaker(L1_3)
+var L1_4 = learnerPopulation(s2_4);
+var s2_5 = speaker(L1_4)
+var L1_5 = learnerPopulation(s2_5);
+var s2_6 = speaker(L1_5)
+var L1_6 = learnerPopulation(s2_6);
+var s2_7 = speaker(L1_6)
+var L1_7 = learnerPopulation(s2_7);
+var s2_8 = speaker(L1_7)
+var L1_8 = learnerPopulation(s2_8);
+var s2_9 = speaker(L1_8)
+
+viz.line(
+  [0,1,2,3,4,5,6,7, 8,9],
+  map(function(b){
+    return expectation(b, function(c){return c.prevalence})
+  }, [statePrior, obsPosterior, L1_1, L1_2, L1_3, L1_4, L1_5, L1_6, L1_7, L1_8])
+)
+
+viz.line(
+  [0,1,2,3,4,5,6,7, 8,9],
+  map(function(b){
+    return Math.exp(marginalize(b, "prevalence").score(0));
+  }, [statePrior, obsPosterior, L1_1, L1_2, L1_3, L1_4, L1_5, L1_6, L1_7, L1_8])
+)
+
+viz.line(
+  [0,1,2,3,4,5,6,7, 8,9],
+  map(function(a){
+    return Math.exp(a.score("generic"))
+  }, [s2_0, s2_1, s2_2, s2_3, s2_4, s2_5, s2_6,s2_7,s2_8, s2_9])
+)
+
+var displayPrevTable = function(dist){
+  viz.table(marginalize(dist, "prevalence"))
+}
+
+display('prior on prevalence')
+displayPrevTable(statePrior)
+display('prevalence dist after observations')
+displayPrevTable(obsPosterior)
+display('prevalence dist after generation of generic speakers')
+displayPrevTable(L1_1)
+display('gen 2')
+displayPrevTable(L1_2)
+display('gen 3')
+displayPrevTable(L1_3)
+display('gen 4')
+displayPrevTable(L1_4)
+display('gen 5')
+displayPrevTable(L1_5)
