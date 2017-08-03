@@ -1,0 +1,240 @@
+---
+title: "Generics and exploration"
+output: html_notebook
+---
+
+```{r}
+library(rwebppl)
+library(tidyverse)
+library(jsonlite)
+```
+
+```{r wpplHelpers}
+wpplHelpers <- '
+var snap = function(x){
+  return Math.round(x*20)/20
+}
+var marginalize = function(dist, key){
+  return Infer({method: "enumerate"}, function(){ return sample(dist)[key] })
+}
+'
+```
+
+```{r priorModel}
+priorModel <- '
+var priorSampler = function(kindsOfThings, rates){
+  var individualType = categorical(kindsOfThings);
+  var rate = beta(rates[individualType][0])
+  return {component: individualType, prevalence: snap(rate)}
+}
+
+var statePrior = Infer({method: "forward", samples: 10000, 
+  model: function(){ 
+    return priorSampler(priorParameters.kindsOfThings, priorParameters.rates) 
+  } 
+})
+
+var probability = function(dist, key){
+  return Math.exp(dist.score(key))
+}
+'
+```
+
+
+```{r genericsModel}
+genericsModel <- '
+var alpha_1 = 20;
+var alpha_2 = 1;
+
+var utterances = ["generic", "silence"];
+
+var thresholdBins = map(function(x){
+  return x > (1/40) ? x - (1/40) : x;
+}, sort(marginalize(statePrior, "prevalence").support()));
+
+var thresholdPrior = function() { return uniformDraw(thresholdBins) };
+var utterancePrior = function() { return uniformDraw(utterances) }
+
+var meaning = function(utterance, state, threshold) {
+  return (utterance == "generic") ? state.prevalence > threshold : true
+}
+
+var quds = {
+  component: function(state){ return state.component },
+  prevalence: function(state){ return state.prevalence }
+}
+
+var literalListener = cache(function(utterance, threshold, qud) {
+  Infer({method: "enumerate"}, function(){
+    var state = sample(statePrior)
+    var qudFn = quds[qud];
+    var qudVal = qudFn(state);
+    var m = meaning(utterance, state, threshold);
+    condition(m)
+    return qudVal
+  })
+})
+
+var speaker1 = cache(function(qudVal, threshold, qud) {
+  Infer({method: "enumerate"}, function(){
+    var utterance = utterancePrior()
+    var L0 = literalListener(utterance, threshold, qud)
+    factor( alpha_1*L0.score(qudVal) )
+    return utterance
+  })
+})
+
+var pragmaticListener = function(utterance, obs, qud) {
+  Infer({method: "enumerate"}, function(){
+    var state = sample(statePrior)    
+    var qudFn = quds[qud];
+    var qudVal = qudFn(state);
+    var threshold = thresholdPrior();
+    var S1 = speaker1(qudVal, threshold, qud)
+    observe(S1, utterance);
+    obs.n > 0 ? observe(Binomial({p: state.prevalence, n: obs.n}), obs.positive) : null
+
+    return  flip(state.prevalence)
+  })
+}
+
+var binomObservation = function(obs){
+  Infer({method: "enumerate"}, function(){
+   var state = sample(statePrior)  
+    observe(Binomial({p: state.prevalence, n: obs.n + 1}), obs.positive + 1)
+    return flip(state.prevalence)
+  })
+}
+
+var preds = map(function(nFepsTried){
+  var observationalData = {n: nFepsTried, positive: 0}
+    return {
+     n: nFepsTried, 
+     generic: probability(pragmaticListener("generic", observationalData, "prevalence"), true),
+     singlePositiveObservation: probability(binomObservation(observationalData), true)
+   }
+ }, _.range(0, 11))
+preds
+'
+
+```
+
+
+```{r}
+rareProb = 0.3
+rareProbs = c(1 - rareProb, rareProb)
+components <- c("x0", "x1")
+intermediateShape = data.frame(a = 5, b = 5)
+strongShape = data.frame(a = 10, b = 1)
+weakShape = data.frame(a = 1, b = 10)
+nullShape = data.frame(a = 1, b = 100)
+
+priorsToTry = list(
+  common = list(
+      uniform = list(kindsOfThings = list(ps = c(0, 1), vs = components),
+                 rates = list(
+                   x0 = nullShape,
+                   x1 = data.frame(a = 1, b = 1)
+                   )),
+      intermediate = list(kindsOfThings = list(ps = c(0, 1), vs = components),
+                 rates = list(
+                   x0 = nullShape, x1 = intermediateShape
+                 )),
+      strong = list(kindsOfThings = list(ps = c(0, 1), vs = components),
+                 rates = list(
+                   x0 = nullShape, x1 = strongShape
+                 )),
+      weak =  list(kindsOfThings = list(ps = c(0, 1), vs = components),
+                 rates = list(
+                   x0 = nullShape, x1 = weakShape
+                 ))
+  ),
+  rare = list(
+      uniform = list(kindsOfThings = list(ps = rareProbs, vs = components),
+                 rates = list(
+                   x0 = nullShape, x1 = data.frame(a = 1, b = 1)
+                 )),
+      intermediate = list(kindsOfThings = list(ps = rareProbs, vs = components),
+                 rates = list(
+                   x0 = nullShape, x1 = intermediateShape
+                 )),
+      strong = list(kindsOfThings = list(ps = rareProbs, vs = components),
+                 rates = list(
+                   x0 = nullShape, x1 = strongShape
+                 )),
+      weak =  list(kindsOfThings = list(ps = rareProbs, vs = components),
+                 rates = list(
+                   x0 = nullShape, x1 = weakShape
+                 ))
+  )
+)
+
+priorTypes = c("common", "rare")
+priorShapes = c("uniform", "intermediate", "strong", "weak")
+model.predictions <- data.frame()
+for (ty in priorTypes){
+  for (sh in priorShapes){
+    priors = priorsToTry[[ty]][[sh]]
+    rs <- webppl(program_code = paste(wpplHelpers, priorModel, genericsModel, sep = '\n'),
+                 data = priors, data_var = 'priorParameters')
+    model.predictions <- bind_rows(model.predictions, rs %>% mutate(priorType = paste(ty, sh, sep = "_")))
+    print(sh)
+  }
+  print(ty)
+}
+```
+
+```{r}
+model.predictions %>% 
+  gather(key, val, -n, -priorType) %>% 
+  ggplot(., aes( x = n , y = val, linetype = key))+ geom_line()+
+  facet_wrap(~priorType, nrow = 2)+
+  ylab("Predictive probability")+
+  xlab("Number of negative examples")+
+  scale_x_continuous(limits = c(0, 10), breaks = c(0, 5, 10))+
+  scale_y_continuous(limits= c(0, 1), breaks = c(0, 0.5, 1))
+```
+
+```{r samplePriors}
+samplePrior <- function(parameters){
+  comp <- rbinom(
+    p = parameters[["kindsOfThings"]][["ps"]][2], 
+    n = 10000, 
+    size = 1
+    )
+  sapply(paste("x", comp, sep = ""), function(i){
+    componentShapes = parameters[["rates"]][[i]]
+    samp <- rbeta(n = 1, 
+          shape1 = componentShapes[["a"]], 
+          shape2 = componentShapes[["b"]])
+  }, USE.NAMES = F)
+}
+
+
+priors.samples <- data.frame()
+for (ty in priorTypes){
+  for (sh in priorShapes){
+    priors = priorsToTry[[ty]][[sh]]
+
+    priors.samples <- bind_rows(
+      priors.samples, 
+      data.frame(
+        x = samplePrior(priors),
+        priorType = paste(ty, sh, sep = "_")
+        )
+      )
+    print(sh)
+  }
+  print(ty)
+}
+```
+
+```{r}
+priors.samples %>%
+  ggplot(., aes(x = x))+
+  geom_density()+
+  facet_wrap(~priorType, nrow = 2, scales = 'free')+
+  scale_x_continuous(limits = c(0, 1), breaks = c(0, 0.5, 1))+
+  xlab("Prevalence / Probability")
+```
+
